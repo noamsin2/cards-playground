@@ -10,7 +10,11 @@
 /[Bb]uilds/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
+<<<<<<< HEAD
 Packages/
+=======
+
+>>>>>>> 7d1c64a4e4386ab509af40d36dada4923cb0f7ff
 # MemoryCaptures can get excessive in size.
 # They also could contain extremely sensitive data
 /[Mm]emoryCaptures/
