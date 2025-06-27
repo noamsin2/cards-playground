@@ -6,6 +6,7 @@ using TMPro;
 using Models;
 using System.Collections;
 using UnityEngine.Networking;
+using System.Linq;
 
 public class CollectionPanel : MonoBehaviour
 {
@@ -14,13 +15,21 @@ public class CollectionPanel : MonoBehaviour
     [SerializeField] private Button nextButton, prevButton;
     [SerializeField] private TMP_Text pageText;
 
-    private List<CardData> allCards; // Stores all cards
+    private Dictionary<int, CardData> allCards; // Stores all cards as a dictionary
+    private List<int> cardIds; // Stores list of IDs for pagination purposes
     private int currentPage = 0;
     private const int CardsPerPage = 8; // Show 8 cards at a time
 
     void Start()
     {
         allCards = CardsManager.Instance.allCards;
+        if(allCards == null)
+        {
+            Debug.Log("null");
+        }
+        cardIds = allCards.Keys
+       .OrderBy(id => allCards[id].cardName)
+       .ToList();
         UpdateUI();
     }
 
@@ -29,25 +38,34 @@ public class CollectionPanel : MonoBehaviour
         ClearCards();
 
         int startIdx = currentPage * CardsPerPage;
-        int endIdx = Mathf.Min(startIdx + CardsPerPage, allCards.Count);
+        int endIdx = Mathf.Min(startIdx + CardsPerPage, cardIds.Count);
 
         for (int i = startIdx; i < endIdx; i++)
         {
+            int cardId = cardIds[i];  // Get the card ID from the list
+            CardData card = allCards[cardId];
             GameObject cardObj = Instantiate(cardPrefab, cardContainer);
             TMP_Text cardText = cardObj.transform.Find("Name Background/Card Name")?.GetComponent<TMP_Text>();
             TMP_Text cardDescription = cardObj.transform.Find("Description Background/Card Description")?.GetComponent<TMP_Text>();
 
             Image cardImage = cardObj.GetComponentInChildren<Image>();
-            cardText.text = allCards[i].cardName; // Display card name
-            cardDescription.text = allCards[i].cardDescription;
-            cardImage.sprite = allCards[i].cardImage; // Display card image
+            cardText.text = card.cardName; // Display card name
+            cardDescription.text = card.cardDescription;
+            cardImage.sprite = card.cardImage; // Display card image
+            Button cardButton = cardObj.GetComponentInChildren<Button>();
+            cardButton.onClick.AddListener(() => AddCardToDeck(cardId));
         }
 
         pageText.text = $"Page {currentPage + 1}/{Mathf.CeilToInt((float)allCards.Count / CardsPerPage)}";
         prevButton.interactable = currentPage > 0;
         nextButton.interactable = endIdx < allCards.Count;
     }
+    void AddCardToDeck(int cardId)
+    {
+        //CardData cardToAdd = allCards[cardId];
 
+        DecksManager.Instance.AddCardToDeck(cardId);
+    }
     public void NextPage()
     {
         if ((currentPage + 1) * CardsPerPage < allCards.Count)
@@ -73,22 +91,4 @@ public class CollectionPanel : MonoBehaviour
             Destroy(child.gameObject);
         }
     }
-    //IEnumerator LoadImage(string url, Image cardImage, GameObject cardObj)
-    //{
-    //    if (string.IsNullOrEmpty(url)) yield break;
-    //    url = SupabaseManager.Instance.GetCardUrl(url);
-    //    UnityWebRequest request = UnityWebRequestTexture.GetTexture(url);
-    //    yield return request.SendWebRequest();
-
-    //    if (request.result == UnityWebRequest.Result.Success)
-    //    {
-    //        Texture2D texture = DownloadHandlerTexture.GetContent(request);
-    //        cardImage.sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
-    //        cardObj.SetActive(true);
-    //    }
-    //    else
-    //    {
-    //        Debug.LogError($"Failed to load image: {url}");
-    //    }
-    //}
 }

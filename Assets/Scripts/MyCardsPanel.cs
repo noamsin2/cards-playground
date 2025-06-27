@@ -7,11 +7,11 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
-
+using Michsky.UI.Reach;
 public class MyCardsPanel : MonoBehaviour
 {
     [SerializeField] private Transform contentPanel; // The Content area of your ScrollView (where the games will be listed)
-    [SerializeField] private GameObject cardItemPrefab; // A prefab that represents a card item (button)
+    [SerializeField] private PanelButton cardItemPrefab; // A prefab that represents a card item (button)
     [SerializeField] private EditCardPanel editCardPanel; // A prefab that represents a card item (button)
     [SerializeField] private DeleteValidationPanel deleteValidationPanel;
     [SerializeField] private EffectsPanel editEffectsPanel;
@@ -48,36 +48,21 @@ public class MyCardsPanel : MonoBehaviour
         foreach (var card in cards)
         {
             // Instantiate the prefab for each game
-            GameObject gameItem = Instantiate(cardItemPrefab, contentPanel);
-            // Find the Text or Button inside the prefab (depending on your design)
-            TMP_Text cardNameText = gameItem.GetComponentInChildren<TMP_Text>(); // Assuming the prefab has a TMP_Text component
-            Button displayButton = gameItem.GetComponent<Button>(); // If you want to make it clickable
+            PanelButton gameItem = Instantiate(cardItemPrefab, contentPanel);
+
             Button editButton = gameItem.transform.Find("Edit Card Btn").GetComponent<Button>(); // The edit button inside the prefab
             Button deleteButton = gameItem.transform.Find("Delete Card Btn").GetComponent<Button>(); // The delete button inside the prefab
             // Set the game name
-            cardNameText.text = card.Name;
-
+            gameItem.buttonText = card.Name;
+            
             // edit the game button
             editButton.onClick.AddListener(async () => await OnEditClick(card));
             deleteButton.onClick.AddListener(() => deleteValidationPanel.InitializePanel(card));
             // If the item is clickable (like a button), you can attach a click handler
-            displayButton.onClick.AddListener(() => ShowCard(card));
-            EventTrigger trigger = gameItem.GetComponent<EventTrigger>();
-            if (trigger != null)
-            {
-                // Pointer Exit: Hide the image
-                EventTrigger.Entry pointerExit = new EventTrigger.Entry
-                {
-                    eventID = EventTriggerType.PointerExit
-                };
-                pointerExit.callback.AddListener((eventData) =>
-                {
+            gameItem.onClick.AddListener(() => ShowCard(card));
+            gameItem.onExit.AddListener(() => HideCard());
 
-                        HideCard();
-                }); // Hide image when pointer exits
-                
-                trigger.triggers.Add(pointerExit);
-            }
+            gameItem.UpdateUI();
         }
     }
     private void HideCard()
@@ -90,7 +75,7 @@ public class MyCardsPanel : MonoBehaviour
         if (SupabaseManager.Instance != null)
         {
             // Fetch the card details by ID from the database
-            string cardUrl = SupabaseManager.Instance.GetCardUrl(card.Image_URL);
+            string cardUrl = SupabaseManager.Instance.GetCardUrl(SupabaseManager.CARD_BUCKET,card.Image_URL);
 
             if (!cardUrl.IsNullOrEmpty())
             {

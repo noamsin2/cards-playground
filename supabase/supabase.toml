@@ -1,0 +1,2 @@
+[functions."delete-old-games"] 
+verify_jwt = false 

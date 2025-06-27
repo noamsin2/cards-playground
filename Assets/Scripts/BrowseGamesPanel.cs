@@ -4,10 +4,10 @@ using Supabase;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine.InputSystem;
-
+using Michsky.UI.Reach;
 public class BrowseGamesPanel : MonoBehaviour
 {
-    [SerializeField] private GameObject gameButtonPrefab; // Prefab for each game entry
+    [SerializeField] private Michsky.UI.Reach.PanelButton gameButtonPrefab; // Prefab for each game entry
     [SerializeField] private Transform contentParent; // Parent of the ScrollView content
     [SerializeField] private ScrollRect scrollRect;
     [SerializeField] private GameDetailsPanel gameDetailsPanel;
@@ -29,9 +29,10 @@ public class BrowseGamesPanel : MonoBehaviour
 
         foreach (var game in response)
         {
-            GameObject button = Instantiate(gameButtonPrefab, contentParent);
-            button.GetComponentInChildren<TMPro.TMP_Text>().text = game.Name;
-            button.GetComponent<Button>().onClick.AddListener(() => gameDetailsPanel.ShowGameDetails(game));
+            Michsky.UI.Reach.PanelButton button = Instantiate(gameButtonPrefab, contentParent);
+            button.buttonText = game.Name;
+            button.onClick.AddListener(() => gameDetailsPanel.ShowGameDetails(game));
+            button.UpdateUI();
         }
 
         currentPage++;
@@ -40,9 +41,10 @@ public class BrowseGamesPanel : MonoBehaviour
 
     void OnScroll(Vector2 scrollPosition)
     {
-        if (scrollPosition.y <= 0.1f && !isLoading) // Near bottom
+        if (scrollPosition.y <= 0.01f && !isLoading)
         {
             LoadGames();
         }
     }
+
 }

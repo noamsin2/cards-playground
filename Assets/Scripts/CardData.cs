@@ -7,6 +7,7 @@ public class CardEffect
 {
     public string action;
     public string effect;
+    public int value;
 }
 
 [System.Serializable]

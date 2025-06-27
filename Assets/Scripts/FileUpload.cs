@@ -1,34 +1,43 @@
 using UnityEngine;
-using UnityEngine.UI;
-using TMPro; // Optional for TextMeshPro
-using System.IO;
+using TMPro;
+using System;
+using System.Collections;
+using SimpleFileBrowser;
 
 public class FileUpload : MonoBehaviour
 {
-    
-    public TMP_Text fileNameTMP; // TextMeshPro
+    public TMP_Text fileNameTMP;
     public static string selectedFilePath;
 
-    
-    public void OpenFileDialog()
+    public void ShowFileDialog(Action<string> onFileSelected)
     {
-        // Open a file dialog (this works in the Editor and Standalone builds)
-        selectedFilePath = UnityEditor.EditorUtility.OpenFilePanel("Select a File", "", "*");
+        StartCoroutine(ShowFileBrowserCoroutine(onFileSelected));
+    }
 
-        if (!string.IsNullOrEmpty(selectedFilePath))
+    private IEnumerator ShowFileBrowserCoroutine(Action<string> onFileSelected)
+    {
+        yield return FileBrowser.WaitForLoadDialog(
+            pickMode: FileBrowser.PickMode.Files,
+            allowMultiSelection: false,
+            initialPath: null,
+            title: "Select a File",
+            loadButtonText: "Select"
+        );
+
+        if (FileBrowser.Success)
         {
-            Debug.Log("File selected: " + selectedFilePath);
+            selectedFilePath = FileBrowser.Result[0];
+            Debug.Log("Selected: " + selectedFilePath);
 
-            // Display the selected file name in the UI
             if (fileNameTMP != null)
-                fileNameTMP.text = Path.GetFileName(selectedFilePath);
-            
+                fileNameTMP.text = System.IO.Path.GetFileName(selectedFilePath);
+
+            onFileSelected?.Invoke(selectedFilePath);
         }
         else
         {
-            Debug.Log("No file selected.");
+            Debug.Log("User cancelled file selection.");
+            onFileSelected?.Invoke(null);
         }
     }
-
-    
 }

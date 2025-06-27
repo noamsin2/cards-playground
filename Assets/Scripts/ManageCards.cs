@@ -5,6 +5,9 @@ using Models;
 using Microsoft.IdentityModel.Tokens;
 using System.Collections.Generic;
 using static EffectsPanel;
+using UnityEngine.UI;
+using System;
+using System.Linq;
 public class ManageCards : MonoBehaviour
 {
     //public SupabaseIntegration supabaseIntegration;
@@ -14,16 +17,29 @@ public class ManageCards : MonoBehaviour
     [SerializeField] private EffectsPanel effectsPanel;
     [SerializeField] private TMP_Text fileText;
     [SerializeField] private MyCardsPanel myCardsPanel;
+    [SerializeField] private GameObject errorMessage;
+    [SerializeField] private NewCardPanel newCardPanel;
     public async void UploadFileToSupabase()
     {
+        if (effectsPanel.existingEffects.All(kvp => kvp.Value == null || kvp.Value.Count == 0))
+        {
+            Debug.LogError("NO EFFECTS");
+            ShowError();
+            return;
+        }
+        
         int fk_game_id = int.Parse(gameID.GetComponent<TextMeshProUGUI>().text);
         Dictionary<string, List<string>> cardEffects = new Dictionary<string, List<string>>();
         Dictionary<string, List<EffectWithX>>  existingEffects = effectsPanel.existingEffects;
         Debug.Log("UPLOAD FILE TO SUPABASE");
         Debug.Log(FileUpload.selectedFilePath);
-        if (!string.IsNullOrEmpty(FileUpload.selectedFilePath))
+        string filePath = FileUpload.selectedFilePath;
+        
+        
+        if (!string.IsNullOrEmpty(filePath))
         {
-            await SupabaseManager.Instance.UploadCard(FileUpload.selectedFilePath, cardName.text, fk_game_id, existingEffects);
+            
+            await SupabaseManager.Instance.UploadCard(filePath, cardName.text, fk_game_id, existingEffects);
             FileUpload.selectedFilePath = null;
             myCardsPanel.DisplayCards();
         }
@@ -33,6 +49,9 @@ public class ManageCards : MonoBehaviour
         }
         cardName.text = string.Empty;
         fileText.text = string.Empty;
+        myCardsPanel.DisplayCards();
+        newCardPanel.gameObject.SetActive(false);
+
     }
     public async void EditFileInSupabase()
     {
@@ -41,25 +60,41 @@ public class ManageCards : MonoBehaviour
         Debug.Log(cardName.text);
         if (card != null)
         {
-            if (cardName.text != card.Name)
+            var updatedEffects = effectsPanel.existingEffects;
+            if (updatedEffects.All(kvp => kvp.Value == null || kvp.Value.Count == 0))
             {
-                await SupabaseManager.Instance.EditCardOnDatabase(card, cardName.text, card.Image_URL);
+                Debug.LogError("NO EFFECTS");
+                ShowError();
+                return;
+            }
+            int uploadFlag = editCardPanel.uploadFlag;
+            if (cardName.text != card.Name || uploadFlag == 1)
+            {
+                Debug.Log("upload flag: " + editCardPanel.uploadFlag);
+                await SupabaseManager.Instance.EditCardOnDatabase(card, cardName.text, card.Image_URL, editCardPanel.uploadFlag == 1);
             }
             if (!string.IsNullOrEmpty(FileUpload.selectedFilePath))
             {
                 await SupabaseManager.Instance.EditCardOnStorage(card, FileUpload.selectedFilePath);
+                editCardPanel.uploadFlag = 0;
             }
-            var updatedEffects = effectsPanel.existingEffects;
+            
             if (updatedEffects != null)
             {
                 await SupabaseManager.Instance.EditCardEffectsInDatabase(updatedEffects, card.Card_ID);
             }
             Debug.Log("Card and effects updated successfully.");
             FileUpload.selectedFilePath = null;
+            myCardsPanel.DisplayCards();
+            editCardPanel.gameObject.SetActive(false);
         }
         else
         {
             Debug.LogWarning("No card selected for editing.");
         }
+    }
+    private void ShowError()
+    {
+        errorMessage.GetComponent<Animator>().SetTrigger("ErrorTrigger");
     }
 }

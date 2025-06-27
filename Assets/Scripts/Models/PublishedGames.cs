@@ -32,6 +32,8 @@ namespace Models
         public string Game_Settings { get; set; }
         [Column("games_played")]
         public int Games_Played { get; set; }
+        [Column("updated_at")]
+        public DateTime? Updated_At { get; set; }
     }
 
 }

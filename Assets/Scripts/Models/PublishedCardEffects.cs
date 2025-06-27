@@ -20,7 +20,7 @@ namespace Models
         public string Action { get; set; }
         [Column("x")]
         // Action of the card
-        public string X { get; set; }
+        public int X { get; set; }
     }
 
 }

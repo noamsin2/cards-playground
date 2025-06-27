@@ -3,21 +3,22 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Threading.Tasks;
-
+using Michsky.UI.Reach;
+using UnityEngine.UIElements;
 public class EffectsPanel : MonoBehaviour
 {
     [Header("Available Effects UI")]
-    [SerializeField] private TMP_Dropdown dropdownAvailableActions;
+    [SerializeField] private Michsky.UI.Reach.Dropdown dropdownAvailableActions;
     [SerializeField] private ScrollRect availableEffectsScrollView;
     [SerializeField] private GameObject effectTogglePrefab;
-    [SerializeField] private TMP_Dropdown xDropdown;
+    [SerializeField] private Michsky.UI.Reach.Dropdown xDropdown;
     [Header("Existing Effects UI")]
-    [SerializeField] private TMP_Dropdown dropdownExistingActions;
+    [SerializeField] private Michsky.UI.Reach.Dropdown dropdownExistingActions;
     [SerializeField] private ScrollRect existingEffectsScrollView;
 
     [Header("Buttons")]
-    [SerializeField] private Button addButton;
-    [SerializeField] private Button removeButton;
+    [SerializeField] private ButtonManager addButton;
+    [SerializeField] private ButtonManager removeButton;
     private bool isInitialized = false;
     private Dictionary<string, List<string>> availableEffects;
 
@@ -51,25 +52,22 @@ public class EffectsPanel : MonoBehaviour
     private void PopulateDropdown()
     {
         // Clear existing options
-        xDropdown.ClearOptions();
+        xDropdown.items.Clear();
 
         // Generate a list of numbers from 1 to 20
         List<string> options = new List<string>();
         for (int i = 1; i <= 20; i++)
         {
-            options.Add(i.ToString());
+            xDropdown.CreateNewItem(i.ToString());
         }
-
-        // Add options to the dropdown
-        xDropdown.AddOptions(options);
     }
     public void InitializePanel()
     {
-        if (isInitialized) return;
+        //if (isInitialized) return;
 
-        isInitialized = true;
+        //isInitialized = true;
 
-        xDropdown.value = 0;
+        //xDropdown.value = 0;
         availableEffects = new Dictionary<string, List<string>>()
         {
             { "On Play", new List<string> { "Draw X Cards", "Gain X Mana", "Deal X Damage" } },
@@ -87,17 +85,18 @@ public class EffectsPanel : MonoBehaviour
     private void PopulateDropdowns()
     {
         // Clear existing options and listeners
-        dropdownAvailableActions.ClearOptions();
+        dropdownAvailableActions.items.Clear();
         dropdownAvailableActions.onValueChanged.RemoveAllListeners();
 
-        dropdownExistingActions.ClearOptions();
+        dropdownExistingActions.items.Clear();
         dropdownExistingActions.onValueChanged.RemoveAllListeners();
 
         // Add new options
         var actions = new List<string> { "On Play", "On Draw" };
-        dropdownAvailableActions.AddOptions(actions);
-        dropdownExistingActions.AddOptions(actions);
-
+        foreach (var action in actions) {
+            dropdownAvailableActions.CreateNewItem(action);
+            dropdownExistingActions.CreateNewItem(action);
+        }
         // Re-add listeners
         dropdownAvailableActions.onValueChanged.AddListener(delegate { PopulateAvailableEffects(); });
         dropdownExistingActions.onValueChanged.AddListener(delegate { PopulateExistingEffects(); });
@@ -110,15 +109,18 @@ public class EffectsPanel : MonoBehaviour
             Destroy(child.gameObject);
         }
 
-        string selectedAction = dropdownAvailableActions.options[dropdownAvailableActions.value].text;
+        string selectedAction = dropdownAvailableActions.items[dropdownAvailableActions.selectedItemIndex].itemName;
+        Debug.Log("AVAILABLE SELECTED ACTION: " + selectedAction);
         if (availableEffects.ContainsKey(selectedAction))
         {
             foreach (var effect in availableEffects[selectedAction])
             {
+                Debug.Log("available effect:" + effect);
                 GameObject newToggle = Instantiate(effectTogglePrefab, availableEffectsScrollView.content);
-                newToggle.GetComponentInChildren<Text>().text = effect;
+                newToggle.GetComponentInChildren<TMP_Text>().text = effect;
 
-                var toggle = newToggle.GetComponent<Toggle>();
+                var toggle = newToggle.GetComponent<UnityEngine.UI.Toggle>();
+                toggle.isOn = false;
                 toggle.onValueChanged.AddListener(isSelected =>
                 {
                     if (isSelected)
@@ -137,16 +139,17 @@ public class EffectsPanel : MonoBehaviour
             Destroy(child.gameObject);
         }
 
-        string selectedAction = dropdownExistingActions.options[dropdownExistingActions.value].text;
-
+        string selectedAction = dropdownExistingActions.items[dropdownExistingActions.selectedItemIndex].itemName;
+        Debug.Log("AVAILABLE SELECTED ACTION: " + selectedAction);
         if (existingEffects.ContainsKey(selectedAction))
         {
             foreach (var effectWithX in existingEffects[selectedAction])
             {
                 GameObject newToggle = Instantiate(effectTogglePrefab, existingEffectsScrollView.content);
-                newToggle.GetComponentInChildren<Text>().text = effectWithX.ToString();
+                newToggle.GetComponentInChildren<TMP_Text>().text = effectWithX.ToString();
 
-                var toggle = newToggle.GetComponent<Toggle>();
+                var toggle = newToggle.GetComponent<UnityEngine.UI.Toggle>();
+                toggle.isOn = false;
                 toggle.onValueChanged.AddListener(isSelected =>
                 {
                     if (isSelected)
@@ -159,24 +162,36 @@ public class EffectsPanel : MonoBehaviour
     }
 
 
-private void AddSelectedEffects()
+    private void AddSelectedEffects()
     {
-        string selectedAction = dropdownAvailableActions.options[dropdownAvailableActions.value].text;
-        string selectedX = xDropdown.options[xDropdown.value].text; // Get the selected X value
-
+        string selectedAction = dropdownAvailableActions.items[dropdownAvailableActions.selectedItemIndex].itemName;
+        string selectedX = xDropdown.items[xDropdown.selectedItemIndex].itemName;
+        Debug.Log($"SELECTED ACTION {selectedAction}");
+        Debug.Log($"SELECTED VALUE {selectedX}");
         foreach (Transform child in availableEffectsScrollView.content)
         {
-            var toggle = child.GetComponent<Toggle>();
-            if (toggle.isOn)
+            // Adjust based on your actual prefab structure
+            var toggleUI = child.GetComponent<UnityEngine.UI.Toggle>();
+            if (toggleUI != null && toggleUI.isOn)
             {
-                string effect = child.GetComponentInChildren<Text>().text;
-
-                var effectWithX = new EffectWithX(effect, selectedX);
-
-                if (!existingEffects[selectedAction].Contains(effectWithX))
+                foreach (Transform t in toggleUI.transform)
                 {
-                    existingEffects[selectedAction].Add(effectWithX);
-                    availableEffects[selectedAction].Remove(effect);
+                    Debug.Log("Toggle child: " + t.name);
+                }
+                Debug.Log("NOT NULL");
+                // Assumes TMP_Text is a direct child or sibling of the ToggleUI
+                TMP_Text effectText = toggleUI.GetComponentInChildren<TMP_Text>();
+                if (effectText != null)
+                {
+                    string effect = effectText.text;
+                    Debug.Log("effect:" + effect);
+                    var effectWithX = new EffectWithX(effect, selectedX);
+
+                    if (!existingEffects[selectedAction].Contains(effectWithX))
+                    {
+                        existingEffects[selectedAction].Add(effectWithX);
+                        availableEffects[selectedAction].Remove(effect);
+                    }
                 }
             }
         }
@@ -184,20 +199,18 @@ private void AddSelectedEffects()
         PopulateAvailableEffects();
         PopulateExistingEffects();
     }
-
-
-   private void RemoveSelectedEffects()
+    private void RemoveSelectedEffects()
     {
-        string selectedAction = dropdownExistingActions.options[dropdownExistingActions.value].text;
+        string selectedAction = dropdownExistingActions.items[dropdownExistingActions.selectedItemIndex].itemName;
 
         var effectsToRemove = new List<EffectWithX>();
 
         foreach (Transform child in existingEffectsScrollView.content)
         {
-            var toggle = child.GetComponent<Toggle>();
+            var toggle = child.GetComponent<UnityEngine.UI.Toggle>();
             if (toggle.isOn)
             {
-                string effectText = child.GetComponentInChildren<Text>().text;
+                string effectText = child.GetComponentInChildren<TMP_Text>().text;
 
                 var parts = effectText.Split(new[] { " (X: " }, System.StringSplitOptions.None);
                 if (parts.Length == 2)

@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -9,8 +10,8 @@ public class CardsManager : MonoBehaviour
 {
     public static CardsManager Instance { get; private set; }
 
-    public List<CardData> allCards;  // Holds all cards
-
+    [SerializeField] public Dictionary<int, CardData> allCards;  // Holds all cards
+    public event Action OnCardsLoaded;
     private void Awake()
     {
         if (Instance == null)
@@ -29,23 +30,24 @@ public class CardsManager : MonoBehaviour
     //}
     public async Task LoadAllCards(string gameId)
     {
-        allCards = new List<CardData>();
-        List<Cards> cards = await SupabaseManager.Instance.GetAllCardsInGame(int.Parse(gameId));
+        allCards = new Dictionary<int, CardData>();
+        List<PublishedCards> cards = await SupabaseManager.Instance.GetAllCardsInGame(int.Parse(gameId));
 
         foreach (var card in cards)
         {
-            List<CardEffects> effects = await SupabaseManager.Instance.GetAllCardEffects(card.Card_ID);
+            List<PublishedCardEffects> effects = await SupabaseManager.Instance.GetAllCardEffects(card.Card_ID);
             List<CardEffect> noramlizedEffect = NoramlizeCardEffects(effects);
             string description = MakeCardDescription(noramlizedEffect);
             var tmpCard = new CardData(card.Name, description, null, noramlizedEffect);
-            allCards.Add(tmpCard);
+            allCards[card.Card_ID] = tmpCard;
             int cardIndex = allCards.Count - 1;
-            Debug.Log($"Starting Coroutine for Card: {card.Name}, URL: {card.Image_URL}");
-            StartCoroutine(LoadImage(card.Image_URL, cardIndex));
-            Debug.Log($"Ending Coroutine for Card: {card.Name}, URL: {card.Image_URL}");
+            StartCoroutine(LoadImage(card.Image_URL, card.Card_ID));
         }
+
+        await Task.Yield(); // Let all async operations finish
+        OnCardsLoaded?.Invoke();
     }
-    private List<CardEffect> NoramlizeCardEffects(List<CardEffects> effects)
+    private List<CardEffect> NoramlizeCardEffects(List<PublishedCardEffects> effects)
     {
         List<CardEffect> normalizedEffects = new List<CardEffect>();
         foreach (var effect in effects)
@@ -53,7 +55,8 @@ public class CardsManager : MonoBehaviour
             CardEffect newEffect = new CardEffect
             {
                 action = effect.Action,
-                effect = effect.Effect
+                effect = effect.Effect,
+                value = effect.X
             };
             normalizedEffects.Add(newEffect);
         }
@@ -73,7 +76,7 @@ public class CardsManager : MonoBehaviour
             }
 
             // Add the effect to the corresponding action
-            actionEffectsMap[effect.action].Add(effect.effect);
+            actionEffectsMap[effect.action].Add(effect.effect.Replace("X", effect.value.ToString()));
         }
 
         // Now build the description string
@@ -92,12 +95,12 @@ public class CardsManager : MonoBehaviour
         return string.Join("\n", descriptionParts);
     }
 
-    private IEnumerator LoadImage(string url, int cardIndex)
+    private IEnumerator LoadImage(string url, int cardId)
     {
-        Debug.Log($"LoadImage started for card index {cardIndex}, URL: {url}");
+        //Debug.Log($"LoadImage started for card id {cardId}, URL: {url}");
         if (string.IsNullOrEmpty(url)) yield break;
 
-        url = SupabaseManager.Instance.GetCardUrl(url);
+        url = SupabaseManager.Instance.GetCardUrl(SupabaseManager.PUBLISHED_CARD_BUCKET ,url);
         UnityWebRequest request = UnityWebRequestTexture.GetTexture(url);
         yield return request.SendWebRequest();
 
@@ -106,11 +109,43 @@ public class CardsManager : MonoBehaviour
             Texture2D texture = DownloadHandlerTexture.GetContent(request);
             Sprite newSprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
             // add the image to the last item on the list because we just added it
-            allCards[cardIndex].cardImage = newSprite;
+            allCards[cardId].cardImage = newSprite;
         }
         else
         {
             Debug.LogError($"Failed to load image: {url}");
         }
     }
+    public string GetCardNameByID(int cardID)
+    {
+        return allCards[cardID].cardName;
+    }
+    public string GetCardDescriptionByID(int cardID)
+    {
+        return allCards[cardID].cardDescription;
+    }
+    public Sprite GetCardImageByID(int cardID)
+    {
+        return allCards[cardID].cardImage;
+    }
+    public List<CardEffect> GetCardEffectsByID(int cardID)
+    {
+        return allCards[cardID].effects;
+    }
+    public void PlayCardEffect(int cardID,bool isOpponent)
+    {
+        CardEffectProcessor effectProcessor = FindFirstObjectByType<CardEffectProcessor>();
+        var card = allCards[cardID];
+        Debug.Log(isOpponent);
+        foreach (CardEffect effect in card.effects)
+        {
+            if (effect.action == "On Play")
+            {
+                effectProcessor.ApplyEffect(effect, isOpponent);
+            }
+        }
+
+        Debug.Log($"?? {card.cardName} played!");
+    }
+
 }

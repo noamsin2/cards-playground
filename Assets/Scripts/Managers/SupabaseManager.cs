@@ -1,4 +1,4 @@
-using Cysharp.Threading.Tasks;
+﻿using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Supabase;
 using System;
@@ -20,16 +20,34 @@ using Supabase.Storage;
 using System.Xml.Linq;
 using UnityEngine.InputSystem;
 using static Postgrest.Constants;
-
+using UnityEngine.Rendering;
+using Supabase.Realtime;
+using Supabase.Realtime.PostgresChanges;
+using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
+using Supabase.Gotrue;
+using Newtonsoft.Json;
+using Unity.VisualScripting;
+using Newtonsoft.Json.Linq;
+using Supabase.Realtime.Models;
+using System.Threading.Channels;
+using System.Threading;
+using Postgrest;
 public class SupabaseManager : MonoBehaviour
 {
     public static SupabaseManager Instance { get; private set; }
     [SerializeField] private TimeAPIManager timeAPIManager;
-    private Client client;
+    public Client client { get; private set; }
+
+
+    public event Action<int> OnGameStart; // int = playerIndex
+    public event Action<MatchPlayers> onOpponentUpdate;
+    public event Action<int> OnChangeTurn;
+    public event Action OnLogout;
+    public event Action<int> OnUpdate;
     //private string supabaseUrl;
     //private string apiKey;
-    const string CARD_BUCKET = "card-bucket";
-    const string PUBLISHED_CARD_BUCKET = "published-card-bucket";
+    public const string CARD_BUCKET = "card-bucket";
+    public const string PUBLISHED_CARD_BUCKET = "published-card-bucket";
     //public CardDisplayManager cardDisplayManager;
     private async void Awake()
     {
@@ -38,16 +56,21 @@ public class SupabaseManager : MonoBehaviour
             Instance = this;
             DontDestroyOnLoad(gameObject);
             // Load Supabase credentials from environment variables or hardcode for testing
-            string supabaseUrl = EnvReader.GetEnvVariable("SUPABASE_URL");
-            string apiKey = EnvReader.GetEnvVariable("SUPABASE_API_KEY");
-            Debug.Log(supabaseUrl);
 
+            TextAsset configText = Resources.Load<TextAsset>("supabase_config");
+            if (configText == null)
+            {
+                Debug.LogError("Missing supabase_config.json in Resources folder!");
+                return;
+            }
+            SupabaseConfig config = JsonUtility.FromJson<SupabaseConfig>(configText.text);
+            
             // Initialize Supabase client
             var options = new Supabase.SupabaseOptions
             {
-                AutoConnectRealtime = true
+                AutoConnectRealtime = true,
             };
-            client = new Client(supabaseUrl, apiKey, options);
+            client = new Supabase.Client(config.url, config.key, options);
             await client.InitializeAsync();
             Debug.Log("Supabase client initialized!");
         }
@@ -55,53 +78,51 @@ public class SupabaseManager : MonoBehaviour
         {
             Destroy(gameObject);
         }
-       
+
         //await DeleteAllFilesInBucket(CARD_BUCKET);
     }
 
     // <-----------------------------------Users------------------------------------------>
-    public async Task<int> EnsureSteamUserExists(string steamId)
+    public async Task<Users> EnsureSteamUserExists(string steamId)
     {
         try
         {
-            var response = await client.From<Users>()
-                .Filter("steam_id", Postgrest.Constants.Operator.Equals, steamId)
-                .Get();
 
-            if (response.Models.Count == 0)
+            var response = await client
+             .From<Users>()
+             .Filter("steam_id", Postgrest.Constants.Operator.Equals, steamId)
+             .Get();
+
+
+            if (response.Models.Count > 0)
             {
-                // User does not exist, create a new one
-                var newUser = new Users
-                {
-                    Steam_ID = steamId
-                };
+                Debug.Log("Steam user already exists.");
+                return response.Models[0];
+            }
 
-                var insertResponse = await client.From<Users>().Insert(newUser);
+            // Create a new user
+            var newUser = new Users { Steam_ID = steamId };
+            var insertResponse = await client
+                .From<Users>()
+                .Insert(newUser);
 
-                if (insertResponse.ResponseMessage.IsSuccessStatusCode && insertResponse.Models.Count > 0)
-                {
-                    var createdUser = insertResponse.Models[0]; // Access the first inserted user
-                    Debug.Log("New Steam user created successfully!");
-                    return createdUser.User_ID; // Return the ID of the created user
-                }
-                else
-                {
-                    Debug.LogError($"Failed to create Steam user: {insertResponse.ResponseMessage.ReasonPhrase}");
-                    return -1;
-                }
+            if (insertResponse.ResponseMessage.IsSuccessStatusCode && insertResponse.Models.Count > 0)
+            {
+                Debug.Log("New Steam user created successfully!");
+                return insertResponse.Models[0];
             }
             else
             {
-                Debug.Log("Steam user already exists.");
-                var user = response.Models[0];
-                return user.User_ID;
+                Debug.LogError($"Failed to create Steam user: {insertResponse.ResponseMessage.ReasonPhrase}");
+                return null;
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Exception while checking Steam user: {e.Message}");
-            return -1;
+            Debug.LogError($"Exception while checking/creating Steam user: {e.Message}");
+            return null;
         }
+
     }
 
     // <-----------------------------------Card Game------------------------------------------>
@@ -125,7 +146,7 @@ public class SupabaseManager : MonoBehaviour
             return null;
         }
     }
-    public async Task<CardGames> EditGameSettingsInDatabase(int gameId,string name, string jsonSettings)
+    public async Task<CardGames> EditGameSettingsInDatabase(int gameId, string name, string jsonSettings)
     {
         try
         {
@@ -134,7 +155,7 @@ public class SupabaseManager : MonoBehaviour
                     .Where(cg => cg.Game_ID == gameId)
                     .Set(cg => cg.Game_Settings, jsonSettings)
                     .Update();
-           
+
             return updateResponse.Models[0];
         }
         catch (System.Exception e)
@@ -209,17 +230,10 @@ public class SupabaseManager : MonoBehaviour
         {
             if (cardGame != null)
             {
-                DateTime? serverTime = await timeAPIManager.FetchServerTime();
-                if (serverTime == null)
-                {
-                    Debug.LogError("Failed to fetch the server time.");
-                    return false;
-                }
                 var updateResponse = await client
                     .From<CardGames>()
                     .Where(cg => cg.Game_ID == cardGame.Game_ID)
                     .Set(cg => cg.Is_Deleted, true)
-                    .Set(cg => cg.Deleted_At, serverTime)
                     .Set(cg => cg.Is_Published, false)
                     .Update();
 
@@ -228,19 +242,60 @@ public class SupabaseManager : MonoBehaviour
                     Debug.LogError("Failed to update the game in the database.");
                     return false;
                 }
+                var publishedGameResponse = await client
+                .From<PublishedGames>()
+                .Where(pg => pg.Game_ID == cardGame.Game_ID)
+                .Get();
 
-                Debug.Log("Game 'is_deleted' updated to true.");
-                return true;
+                if (publishedGameResponse.Models.Count > 0)
+                {
+                    // Set Is_Published to false in PublishedGames
+                    var updatePublished = await client
+                        .From<PublishedGames>()
+                        .Where(pg => pg.Game_ID == cardGame.Game_ID)
+                        .Set(pg => pg.Is_Published, false)
+                        .Update();
+
+                    if (updatePublished.Models.Count == 0)
+                    {
+                        Debug.LogWarning("Published game found but failed to update Is_Published to false.");
+                    }
+                    else
+                    {
+                        Debug.Log("Published game Is_Published set to false.");
+                    }
+                    Debug.Log("Game 'is_deleted' updated to true (Deleted_At handled by DB).");
+                    return true;
+                }
             }
-
         }
         catch (System.Exception ex)
         {
             Debug.LogError($"An error occurred while editing the game: {ex.Message}");
             return false;
         }
-        //if there's nothing to change
+
         return true;
+    }
+    public async Task DeleteGameFromDB(CardGames cardGame)
+    {
+        try
+        {
+            if (cardGame != null)
+            {
+                await client.From<CardGames>()
+                    .Where(cg => cg.Game_ID == cardGame.Game_ID)
+                    .Delete();
+
+             
+                Debug.Log("Game was deleted.");
+            }
+
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"An error occurred while editing the game: {ex.Message}");
+        }
     }
     public async Task<bool> RestoreGame(CardGames cardGame)
     {
@@ -274,6 +329,126 @@ public class SupabaseManager : MonoBehaviour
         //if there's nothing to change
         return true;
     }
+    class GameBroadcast : BaseBroadcast
+    {
+        [JsonProperty("game_id")]
+        public int GameId { get; set; }
+
+        [JsonProperty("reason")]
+        public string Reason { get; set; }
+    }
+    public async Task SubscribeToGameEvents(int gameId)
+    {
+        var channel = client.Realtime.Channel("logout");
+
+        var broadcast = channel.Register<GameBroadcast>();
+
+        broadcast.AddBroadcastEventHandler((sender, baseBroadcast) =>
+        {
+            var raw = broadcast.Current();
+
+            // Convert the whole broadcast to a JSON string
+            var json = JsonConvert.SerializeObject(raw);
+
+            // Extract the payload dictionary and deserialize it
+            if (raw.Payload is Dictionary<string, object> payloadDict)
+            {
+                var payloadJson = JsonConvert.SerializeObject(payloadDict);
+                var data = JsonConvert.DeserializeObject<GameBroadcast>(payloadJson);
+                Debug.Log(data.ToString());
+                if (data.GameId == gameId)
+                {
+                    if (data.Reason == "logout")
+                    {
+                        Debug.Log($"Received logout broadcast: {data.Reason}");
+                        OnLogout?.Invoke();
+                    }
+                    else if (data.Reason == "updated")
+                    {
+                        Debug.Log($"Received updated broadcast: {data.Reason}");
+                        OnUpdate?.Invoke(gameId);
+                    }
+                }
+            }
+            else
+            {
+                Debug.LogWarning("Unexpected payload format.");
+            }
+        });
+
+        await channel.Subscribe();
+
+
+    }
+    public async Task<DateTime?> GetPublishedGameUpdatedAt(int gameId)
+    {
+        var updateResponse = await client
+                    .From<PublishedGames>()
+                    .Where(pg => pg.Game_ID == gameId).Get();
+        if (updateResponse.Models.Count > 0)
+        {
+            return updateResponse.Models[0].Updated_At;
+        }
+        return null;
+    }
+    public async Task<bool> SendGameBroadcast(int gameId, string reason, int timeoutMs = 2000)
+    {
+        var channel = client.Realtime.Channel("logout");
+
+        await channel.Subscribe();
+        var wrappedPayload = new
+        {
+            Payload = new
+            {
+                game_id = gameId,
+                reason = reason
+            }
+        };
+        var payload = new
+        {
+            game_id = gameId,
+            reason = reason
+        };
+
+        var sendTask = channel.Send(
+            Supabase.Realtime.Constants.ChannelEventName.Broadcast,
+            "logout",
+            wrappedPayload,
+            timeoutMs
+        );
+
+        var timeoutTask = Task.Delay(timeoutMs);
+
+        var completedTask = await Task.WhenAny(sendTask, timeoutTask);
+
+        if (completedTask == sendTask)
+        {
+            // The sendTask completed first
+            try
+            {
+                bool success = await sendTask;  // Await again to propagate exceptions if any
+                Debug.Log("Broadcast sent? " + success);
+                return success;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("Exception sending broadcast: " + ex);
+                return false;
+            }
+        }
+        else
+        {
+            // Timeout happened
+            Debug.LogError("Broadcast send timed out.");
+            return false;
+        }
+    }
+   
+    public void UnsubscribeFromGameEvents()
+    {
+        var channel = client.Realtime.Channel("logout");
+        client.Realtime.Remove(channel);
+    }
     public async Task<bool> PublishGame(CardGames cardGame)
     {
         try
@@ -283,22 +458,49 @@ public class SupabaseManager : MonoBehaviour
                 Debug.LogError("Game not found.");
                 return false;
             }
+
+            // STEP 1: Fetch current publish state from DB
+            var currentState = await client
+                .From<CardGames>()
+                .Where(cg => cg.Game_ID == cardGame.Game_ID)
+                .Single();
+
+            //bool wasAlreadyPublished = currentState?.Is_Published == true;
+
+            // STEP 2: Set Is_Published to true (if not already)
             var updateResponse = await client
                 .From<CardGames>()
                 .Where(cg => cg.Game_ID == cardGame.Game_ID)
                 .Set(cg => cg.Is_Published, true)
                 .Update();
 
+            //if (wasAlreadyPublished)
+            //{
+            //    // STEP 3: Schedule delayed update via Edge Function
+            //    Debug.Log("Game was already published. Updating timestamp only.");
+
+            //    var updatePublishedGame = await client
+            //        .From<PublishedGames>()
+            //        .Where(pg => pg.Game_ID == cardGame.Game_ID)
+            //        .Set(pg => pg.Is_Published, true)
+            //        .Update();
+
+            //    if (updatePublishedGame.Models.Count == 0)
+            //    {
+            //        Debug.LogError("Failed to update published game's timestamp.");
+            //        return false;
+            //    }
+
+            //    return true;
+            //}
+
+            // STEP 4: Proceed with initial publish
             var publishedGame = await client
                 .From<PublishedGames>()
                 .Where(cg => cg.Game_ID == cardGame.Game_ID).Get();
 
-            int gamesPlayed = 0;
-            if(publishedGame != null)
-            {
-                gamesPlayed = publishedGame.Models[0].Games_Played;
-            }
-            // Copy game to published_games
+            int gamesPlayed = publishedGame?.Models.FirstOrDefault()?.Games_Played ?? 0;
+
             var publishGameResponse = await client.From<PublishedGames>().Upsert(new PublishedGames
             {
                 Game_ID = cardGame.Game_ID,
@@ -317,74 +519,92 @@ public class SupabaseManager : MonoBehaviour
                 Debug.LogError("Failed to publish game.");
                 return false;
             }
-            var cards = await client.From<Cards>().Where(c => c.FK_Game_ID == cardGame.Game_ID).Get();
 
-            // Copy cards and card effects to published_cards
+            var cards = await client.From<Cards>().Where(c => c.FK_Game_ID == cardGame.Game_ID).Get();
 
             foreach (var card in cards.Models)
             {
-                // If the image is changed
-                if(card.Is_Image_Changed == true)
+                // If the image has changed update it in storage
+                if (card.Is_Image_Changed == true)
                 {
-                    
+                    Debug.Log($"CARD {card.Name} was changed");
                     string fileExtension = Path.GetExtension(card.Image_URL);
-                  
                     byte[] downloadedFile = await DownloadFileFromSupabase(CARD_BUCKET, card.Image_URL);
+
+                    string fileNameWithExtension = card.Image_URL;
                     if (downloadedFile != null)
                     {
-                        // Upload and overwrite the file if it exists
-                        await UploadFileToSupabase(PUBLISHED_CARD_BUCKET, card.FK_Game_ID + fileExtension, downloadedFile);
+                        await UploadFileToSupabase(PUBLISHED_CARD_BUCKET, fileNameWithExtension, downloadedFile);
                     }
                     else
                     {
                         Debug.LogError("Failed to download an image while publishing\n");
                     }
                 }
-                var newPublishedCard = new PublishedCards
+                card.Is_Image_Changed = false;
+                await client.From<Cards>().Update(card);
+                await client.From<PublishedCards>().Upsert(new PublishedCards
                 {
                     Card_ID = card.Card_ID,
                     FK_Game_ID = card.FK_Game_ID,
                     Name = card.Name,
-                    Image_URL = card.Image_URL,
-                };
+                    Image_URL = card.Image_URL
+                });
 
-                // Upsert should automatically check for the primary key and replace if it exists, otherwise add the row normally
-                var upsertCardResponse = await client
-                .From<PublishedCards>()
-                .Upsert(newPublishedCard);
-                
-
-                // Fetch card effects for this card
                 var cardEffects = await client.From<CardEffects>()
                     .Where(ce => ce.FK_Card_ID == card.Card_ID)
                     .Get();
 
-                // Copy effects to published_card_effects
                 foreach (var effect in cardEffects.Models)
                 {
-                    var newPublishedEffect = new PublishedCardEffects
+                    await client.From<PublishedCardEffects>().Upsert(new PublishedCardEffects
                     {
                         Effect = effect.Effect,
                         FK_Card_ID = effect.FK_Card_ID,
                         Action = effect.Action,
                         X = effect.X
-                    };
+                    });
+                }
+                
+            }
+            // Remove cards that were deleted
+            var publishedCards = await client.From<PublishedCards>()
+            .Where(pc => pc.FK_Game_ID == cardGame.Game_ID)
+            .Get();
+            var currentCardIds = new HashSet<int>(cards.Models.Select(c => c.Card_ID));
+            foreach (var publishedCard in publishedCards.Models)
+            {
+                if (!currentCardIds.Contains(publishedCard.Card_ID))
+                {
+                    string filePath = publishedCard.Image_URL;
+                    // Delete the published card from DB
+                    await client.From<PublishedCards>()
+                        .Where(pc => pc.Card_ID == publishedCard.Card_ID)
+                        .Delete();
 
-                    var upsertEffectResponse = await client
-                    .From<PublishedCardEffects>()
-                    .Upsert(newPublishedEffect);
+                    // Also delete any effects tied to it
+                    //await client.From<PublishedCardEffects>()
+                    //    .Where(pce => pce.FK_Card_ID == publishedCard.Card_ID)
+                    //    .Delete();
 
+                    // Delete the file from Supabase Storage
+                    var deleteResult = await DeleteCardFromStorage(filePath, PUBLISHED_CARD_BUCKET);
+                    if (!deleteResult)
+                    {
+                        Debug.LogWarning($"Failed to delete image: {publishedCard.Image_URL}");
+                    }
                 }
             }
-            
+
+
+            await SendGameBroadcast(cardGame.Game_ID, "updated");
             Debug.Log("Game, cards, and card effects successfully published.");
             return true;
         }
         catch (Exception ex)
         {
             Debug.LogError($"Error publishing game: {ex.Message}");
-            // Revert changes if there's an error
-            var updateResponse = await client
+            await client
                 .From<CardGames>()
                 .Where(cg => cg.Game_ID == cardGame.Game_ID)
                 .Set(cg => cg.Is_Published, false)
@@ -394,6 +614,22 @@ public class SupabaseManager : MonoBehaviour
         }
     }
 
+    public async Task<PublishedGames> GetPublishedGame(int gameId)
+    {
+        try
+        {
+            var publishedGame = await client
+               .From<PublishedGames>()
+               .Where(cg => cg.Game_ID == gameId).Get();
+            if (publishedGame.Models.Count > 0)
+                return publishedGame.Models[0];
+        }
+        catch (Exception ex)
+        {
+            Debug.Log($"Couldn't find the published game: {ex.Message}");
+        }
+        return null;
+    }
     public async Task<bool> UnpublishGame(CardGames cardGame)
     {
         try
@@ -405,13 +641,18 @@ public class SupabaseManager : MonoBehaviour
                     .Where(cg => cg.Game_ID == cardGame.Game_ID)
                     .Set(cg => cg.Is_Published, false)
                     .Update();
+                var updateResponse2 = await client
+                    .From<PublishedGames>()
+                    .Where(pg => pg.Game_ID == cardGame.Game_ID)
+                    .Set(pg => pg.Is_Published, false)
+                    .Update();
 
-                if (updateResponse.Models.Count == 0)
+                if (updateResponse.Models.Count == 0 || updateResponse2.Models.Count == 0)
                 {
                     Debug.LogError("Failed to update the game in the database.");
                     return false;
                 }
-
+                await SendGameBroadcast(cardGame.Game_ID, "logout");
                 Debug.Log("Game 'is_published' updated to false.");
                 return true;
             }
@@ -424,9 +665,94 @@ public class SupabaseManager : MonoBehaviour
         //if there's nothing to change
         return true;
     }
-    
+
+    public async Task<long> GetCardGamesCount()
+    {
+        try
+        {
+            // Call the RPC and get the count directly
+            long count = await client.Rpc<long>("get_card_games_count", null);
+            Debug.Log($"Count of rows in card_games: {count}");
+            return count;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error calling RPC: {e.Message}");
+        }
+        return -1;
+    }
+    public async Task<long> GetTotalPlayers()
+    {
+        try
+        {
+            long uniqueUserCount = await client.Rpc<long>("get_unique_user_count", null);
+            Debug.Log($"Count of unique fk_user_id in game_players: {uniqueUserCount}");
+            return uniqueUserCount;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error calling RPC: {e.Message}");
+        }
+        return -1;
+    } 
+    public async Task<long> GetTotalUsers()
+    {
+        try
+        {
+            long userCount = await client.Rpc<long>("get_users_count", null);
+            Debug.Log($"Users count: {userCount}");
+            return userCount;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error calling RPC: {e.Message}");
+        }
+        return -1;
+    }
+    public async Task<long> GetTotalGameCreators()
+    {
+        try
+        {
+            long uniqueUserCount = await client.Rpc<long>("get_unique_fk_user_id_count_in_card_games", null);
+            Debug.Log($"Count of unique fk_user_id in card_games: {uniqueUserCount}");
+            return uniqueUserCount;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error calling RPC: {e.Message}");
+        }
+        return -1;
+    }
+    public async Task<long> GetTotalDecks()
+    {
+        try
+        {
+            long decksCount = await client.Rpc<long>("get_decks_count", null);
+            Debug.Log($"Decks count: {decksCount}");
+            return decksCount;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error calling RPC: {e.Message}");
+        }
+        return -1;
+    }
+    public async Task<long> GetTotalCards()
+    {
+        try
+        {
+            long cardsCount = await client.Rpc<long>("get_cards_count", null);
+            Debug.Log($"Cards count: {cardsCount}");
+            return cardsCount;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Error calling RPC: {e.Message}");
+        }
+        return -1;
+    }
     // <-----------------------------------CARDS------------------------------------------>
-    public async Task UploadCard(string filePath, string name, int fk_game_id, Dictionary<string, List<EffectWithX>> cardEffects)
+    public async Task UploadCard(string filePath, string name, int gameId, Dictionary<string, List<EffectWithX>> cardEffects)
     {
         string fileUrl = "";
         Cards card = null;
@@ -447,8 +773,10 @@ public class SupabaseManager : MonoBehaviour
 
             // Add card to the database
             
-            card = await AddCardToDatabase(name, fk_game_id);
-            string fileNameWithExtension = card.Card_ID.ToString() + fileExtension;
+            card = await AddCardToDatabase(name, gameId);
+            string fileNameWithExtension = $"game_{gameId}/{card.Card_ID}{fileExtension}";
+            Debug.Log("Uploading with path: " + fileNameWithExtension);
+
             if (card == null)
             {
                 Debug.LogWarning("Database insertion failed.");
@@ -483,7 +811,7 @@ public class SupabaseManager : MonoBehaviour
             {
                 Debug.LogError($"Failed to update card with file URL: {e.Message}");
                 await DeleteCardFromDatabase(card.Card_ID);
-                await DeleteCardFromStorage(fileUrl);
+                await DeleteCardFromStorage(fileUrl,CARD_BUCKET);
             }
 
         }
@@ -518,8 +846,9 @@ public class SupabaseManager : MonoBehaviour
             }
             Debug.Log($"File uploaded successfully! URL: {fileUrl}");
             Debug.Log($"File '{file_name}' uploaded successfully and database updated.");
-            string result = fileUrl.Replace(bucket, "");
+            string result = fileUrl.Replace(bucket + "/", "");
             return result;
+
         }
         catch (Exception e)
         {
@@ -527,9 +856,9 @@ public class SupabaseManager : MonoBehaviour
             return "";
         }
     }
-    private async Task<bool> DeleteCardFromStorage(string filePath)
+    private async Task<bool> DeleteCardFromStorage(string filePath, string bucket)
     {
-        if(await DeleteFileFromStorage(filePath, CARD_BUCKET))
+        if(await DeleteFileFromStorage(filePath, bucket))
         {
             return true;
         }
@@ -568,10 +897,12 @@ public class SupabaseManager : MonoBehaviour
             Debug.LogError($"Local file does not exist at path: {filePath}");
             return false;
         }
-        
-        var files = await client.Storage.From(CARD_BUCKET).List();
-        bool fileExists = files.Any(file => file.Name == card.Image_URL);
+        string folderPrefix = $"game_{card.FK_Game_ID}/";
+        var files = await client.Storage.From(CARD_BUCKET).List(folderPrefix);
 
+        bool fileExists = files.Any(file => file.Name == Path.GetFileName(card.Image_URL));
+        Debug.Log("Image_URL: " + card.Image_URL);
+      
         string fileName = Path.GetFileName(filePath);
         string fileExtension = Path.GetExtension(fileName);
         
@@ -587,18 +918,16 @@ public class SupabaseManager : MonoBehaviour
         }
         try
         {
+            //string fileNameWithExtension = $"game_{card.FK_Game_ID}/{card.Card_ID}{fileExtension}";
 
-       
-            string fileNameWithExtension = card.Card_ID.ToString() + fileExtension;
-
-            if (await DeleteCardFromStorage(card.Image_URL))
+            if (await DeleteCardFromStorage(card.Image_URL, CARD_BUCKET))
             {
-                string fileUrl = await AddCardToStorage(filePath, fileNameWithExtension, CARD_BUCKET);
-                card.Is_Image_Changed = true;
-                if (!string.IsNullOrEmpty(fileUrl))
-                {
-                    await EditCardOnDatabase(card, card.Name, fileUrl);
-                }
+                string fileUrl = await AddCardToStorage(filePath, card.Image_URL, CARD_BUCKET);
+                //card.Is_Image_Changed = true;
+                //if (!string.IsNullOrEmpty(fileUrl))
+                //{
+                //    await EditCardOnDatabase(card, card.Name, fileUrl, true);
+                //}
                 
             }
             return true;
@@ -608,41 +937,21 @@ public class SupabaseManager : MonoBehaviour
             Debug.LogError("An error occurred while uploading the file: " + e.Message);
             return false;
         }
-        //if (fileUrl.IsNullOrEmpty() && card != null)
-        //{
-        //    await DeleteCardFromDatabase(card.Card_ID);
-        //}
-        //else if (!fileUrl.IsNullOrEmpty() && card != null)
-        //{
-        //    card.Image_URL = fileUrl;
-        //    try
-        //    {
-        //        var update = await client
-        //          .From<Cards>()
-        //          .Where(c => c.Card_ID == card.Card_ID)
-        //          .Set(c => c.Image_URL, fileUrl)
-        //          .Update();
-
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        Debug.LogError($"Failed to update card with file URL: {e.Message}");
-        //        await DeleteCardFromDatabase(card.Card_ID);
-        //        await DeleteFileFromStorage(fileUrl, CARD_BUCKET);
-        //    }
-        //}
 
     }
-    public async Task<bool> EditCardOnDatabase(Cards card, string newName, string newImageUrl)
+    public async Task<bool> EditCardOnDatabase(Cards card, string newName, string newImageUrl, bool isImageUpdated)
     {
+        
         try
         {
-            if (card.Name != newName)
+            if (card.Name != newName || isImageUpdated)
             {
+                Debug.Log("isImageUpdated: "+isImageUpdated);
                 var updateResponse = await client
                     .From<Cards>()
                     .Where(c => c.Card_ID == card.Card_ID)
                     .Set(c => c.Name, newName)
+                    .Set(c => c.Is_Image_Changed, isImageUpdated)
                     .Update();
 
                 if (updateResponse.Models.Count == 0)
@@ -734,9 +1043,9 @@ public class SupabaseManager : MonoBehaviour
             return null;
         }
     }
-    public string GetCardUrl(string filePath)
+    public string GetCardUrl(string bucket,string filePath)
     {
-        return GetFileUrl(CARD_BUCKET, filePath);
+        return GetFileUrl(bucket, filePath);
     }
 
 
@@ -781,16 +1090,25 @@ public class SupabaseManager : MonoBehaviour
             Debug.LogError($"An error occurred while deleting files: {e.Message}");
         }
     }
+
     private async Task<string> UploadFileToSupabase(string bucketName, string filePath, byte[] fileData)
     {
         try
         {
             // Check if the file already exists in the bucket
-            var existingFile = await client.Storage.From(bucketName).List(filePath);
-            if (existingFile != null && existingFile.Count > 0)
+            string prefix = Path.GetDirectoryName(filePath)?.Replace("\\", "/") ?? "";
+            // List files in that folder (this acts as the prefix)
+            var existingFiles = await client.Storage.From(bucketName).List(prefix);
+            // Check if the file already exists
+            bool fileExists = existingFiles.Any(f => f.Name == Path.GetFileName(filePath));
+            Debug.Log($"Attempting to delete: bucket = {bucketName}, path = {filePath}");
+
+            Debug.Log(Path.GetFileName(filePath));
+            if (fileExists)
             {
                 Debug.Log($"File {filePath} already exists. Deleting...");
-                await client.Storage.From(bucketName).Remove(new List<string> { filePath });
+                await DeleteCardFromStorage(filePath, bucketName);
+                //await client.Storage.From(bucketName).Remove(new List<string> { filePath });
             }
 
             // Upload the new file
@@ -855,7 +1173,7 @@ public class SupabaseManager : MonoBehaviour
                     FK_Card_ID = cardId,
                     Effect = effectWithX.Effect,
                     Action = action,
-                    X = effectWithX.X
+                    X = int.Parse(effectWithX.X)
                 });
             }
         }
@@ -928,7 +1246,7 @@ public class SupabaseManager : MonoBehaviour
                 .GroupBy(e => e.Action)
                 .ToDictionary(
                     group => group.Key,
-                    group => group.Select(e => new EffectWithX(e.Effect, e.X)).ToList()
+                    group => group.Select(e => new EffectWithX(e.Effect, e.X.ToString())).ToList()
                 );
 
             return effectDictionary;
@@ -948,8 +1266,8 @@ public class SupabaseManager : MonoBehaviour
             var bucket = storage.From(bucketName);
 
             string publicUrl = bucket.GetPublicUrl(filePath);
-            Debug.Log(filePath);
-            Debug.Log(publicUrl);
+            //Debug.Log(filePath);
+            //Debug.Log(publicUrl);
             return publicUrl;
         }
         catch (Exception e)
@@ -963,11 +1281,13 @@ public class SupabaseManager : MonoBehaviour
     {
         try
         {
+            Debug.Log($"Deleting from bucket: {bucketName}, path: {fileUrl}");
+
             //string card_id_str = card_id.ToString();
             var result = await client.Storage
             .From(bucketName)
-            .Remove(fileUrl);
-            Debug.Log(result);
+            .Remove(new List<string> { fileUrl });
+
             if (result != null)
             {
                 Debug.Log($"File '{fileUrl}' successfully deleted.");
@@ -989,33 +1309,564 @@ public class SupabaseManager : MonoBehaviour
     public async Task<List<PublishedGames>> LoadGames(int currentPage)
     {
         var response = await client.From<PublishedGames>()
+           .Where(pg => pg.Is_Published == true)
            .Order("games_played", Ordering.Descending)
            .Range(currentPage * 10, (currentPage + 1) * 10 - 1)
            .Get();
         return response.Models;
     }
-
+    public async Task<List<CardGames>> LoadGamesAdmin(int currentPage)
+    {
+        var response = await client.From<CardGames>()
+           .Order("name", Ordering.Ascending)
+           .Range(currentPage * 10, (currentPage + 1) * 10 - 1)
+           .Get();
+        return response.Models;
+    }
     // <-----------------------------------GAMES PLAY------------------------------------------>
     public async Task<PublishedGames> GetGameFromDatabase(int gameID)
     {
         var response = await client.From<PublishedGames>().Where(pcg => pcg.Game_ID == gameID).Get();
         return response.Models[0];
     }
-    public async Task<List<Cards>> GetAllCardsInGame(int gameID)
+    public async Task<List<PublishedCards>> GetAllCardsInGame(int gameID)
     {
-        var response = await client.From<Cards>()
+        var response = await client.From<PublishedCards>()
             .Filter("fk_game_id", Postgrest.Constants.Operator.Equals, gameID)
             .Get();
         
         return response.Models;
     }
-    public async Task<List<CardEffects>> GetAllCardEffects(int cardID)
+    public async Task<List<PublishedCardEffects>> GetAllCardEffects(int cardID)
     {
-        var response = await client.From<CardEffects>()
+        var response = await client.From<PublishedCardEffects>()
             .Filter("fk_card_id", Postgrest.Constants.Operator.Equals, cardID)
             .Get();
 
         return response.Models;
+    }
+    //public async Task<Decks> AddDeckToDatabase(Decks deck)
+    //{
+    //    if (deck.Deck_ID == 0)
+    //    {
+    //        deck.Deck_ID = null;  // Let PostgreSQL generate it
+    //    }
+    //    try
+    //    {
+    //        var response = await client
+    //            .From<Decks>()
+    //            .Upsert(deck);
+
+    //        Debug.Log($"Deck {deck.Deck_ID} added/updated successfully.");
+    //        return response.Models[0];
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        Debug.LogError($"Error upserting deck: {ex.Message}");
+    //        return null;
+    //    }
+    //}
+    public async Task<Decks> AddDeckToDatabase(Decks deck)
+    {
+        try
+        {
+            var response = await client
+                .From<Decks>()
+                .Insert(new Decks
+                {
+                    Name = deck.Name,
+                    FK_Game_ID = deck.FK_Game_ID,
+                    FK_User_ID = deck.FK_User_ID,
+                    Card_IDs = deck.Card_IDs,
+                });
+
+            Debug.Log($"Deck {response.Models[0].Deck_ID} added/updated successfully.");
+            return response.Models[0];
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error inserting deck: {ex.Message}");
+            return null;
+        }
+    }
+    public async Task UpdateDeckInDatabase(Decks deck)
+    {
+        try
+        {
+            var response = await client
+                .From<Decks>()
+                .Update(deck);
+
+            Debug.Log($"Deck {deck.Deck_ID} updated successfully.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error updating deck: {ex.Message}");
+        }
+    }
+    public async void DeleteDeckFromDB(DeckData deckToRemove)
+    {
+        try
+        {
+            await client
+            .From<Decks>()
+            .Where(d => d.Deck_ID == deckToRemove.deckID)
+            .Delete();
+
+            Debug.Log($"Deck {deckToRemove.deckID} removed successfully.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error deleting deck: {ex.Message}");
+        }
+    }
+    public async Task<List<Decks>> GetDecksFromDB(int user_id,int game_id)
+    {
+        var response = await client
+       .From<Decks>()
+       .Where(d => d.FK_User_ID == user_id && d.FK_Game_ID == game_id)
+       .Get();
+        Debug.Log($"Retrieved Decks: {response.Models.Count}");
+        return response.Models;  // Returns a list of Decks
+    }
+    // ---------- MATCHMAKING ----------
+    public async Task<bool> CheckForMatch(int currentUserId, int requiredPlayers = 2)
+    {
+        var queueResponse = await client
+            .From<MatchmakingQueue>()
+            .Order("queued_at", Postgrest.Constants.Ordering.Ascending)
+            .Limit(requiredPlayers - 1)
+            .Get();
+
+        var queuePlayers = queueResponse.Models;
+
+        // Check if player is already in the queue
+        if (queuePlayers.Any(p => p.User_ID == currentUserId))
+        {
+            Debug.Log("Already in queue.");
+            return false;
+        }
+
+        if (queuePlayers.Count == requiredPlayers - 1)
+        {
+            // Attempt to delete all opponents atomically
+            try
+            {
+                var allPlayers = queuePlayers.Select(q => q.User_ID).ToList();
+                allPlayers.Add(currentUserId); // include self
+
+                // Delete all opponents from queue
+                foreach (var p in queuePlayers)
+                {
+                    await client
+                        .From<MatchmakingQueue>()
+                        .Where(q => q.User_ID == p.User_ID)
+                        .Delete();
+                }
+                SubscribeToMatchStart(currentUserId);
+                await CreateMatch(allPlayers);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error during matchmaking: {ex.Message}");
+                await AddToQueue(currentUserId);
+                return false;
+            }
+        }
+        else
+        {
+            // Not enough players yet
+            await AddToQueue(currentUserId);
+            return false;
+        }
+    }
+    private async Task AddToQueue(int userId)
+    {
+        try
+        {
+            SubscribeToMatchStart(userId);
+            await client
+                .From<MatchmakingQueue>()
+                .Insert(new MatchmakingQueue { User_ID = userId });
+            Debug.Log("Added to queue.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Failed to add to queue: {ex.Message}");
+        }
+    }
+    public async Task CreateMatch(List<int> playerUserIds)
+    {
+        if (playerUserIds == null || playerUserIds.Count == 0)
+        {
+            Debug.LogError("No players provided to create match.");
+            return;
+        }
+
+        // Step 1: Create a new match with default state
+        var match = new Match
+        {
+            Game_State = new Dictionary<string, object>(), // or any default JSON game state
+            Current_Turn_Index = 0,
+            Created_At = DateTime.UtcNow
+        };
+
+        var matchResponse = await client.From<Match>().Insert(match);
+        var createdMatch = matchResponse.Models.FirstOrDefault();
+
+        if (createdMatch == null)
+        {
+            Debug.LogError("Failed to create match.");
+            return;
+        }
+        GameManager gameManager = GameManager.Instance;
+        int health = 0;
+        if(gameManager.settings.health_win_condition == true)
+            health = int.Parse(gameManager.settings.player_health);
+
+        // Step 2: Assign each player an index and insert into match_players table
+        var matchPlayers = playerUserIds.Select((userId, index) => new MatchPlayers
+        {
+            Match_ID = createdMatch.Match_ID,
+            User_ID = userId,
+            Player_Index = index,
+            Current_Health = health
+        }).ToList();
+
+        await client.From<MatchPlayers>().Insert(matchPlayers);
+
+        Debug.Log($"Created match {createdMatch.Match_ID} with {playerUserIds.Count} players.");
+        // start the match for the player that wasnt in queue but matched with other players
+    }
+    
+
+    public async void SubscribeToMatchStart(int userId)
+    {
+        var channelManager = FindFirstObjectByType<RealTimeChannelManager>();
+        await channelManager.SubscribeToChannel("match_players", ListenType.Inserts,async change =>
+        {
+            var insertedRow = change.Model<MatchPlayers>();
+            if (insertedRow == null)
+            {
+                Debug.LogWarning("Inserted row is null. Dumping raw payload for inspection:");
+                Debug.Log(change?.Payload?.ToString());
+                return;
+            }
+
+            if (insertedRow.User_ID == userId)
+            {
+                Debug.Log("You have been assigned to a match!");
+
+                var matchResult = await client
+                    .From<Match>()
+                    .Where(m => m.Match_ID == insertedRow.Match_ID)
+                    .Get();
+
+                if (matchResult.Models.Count > 0)
+                {
+                    var match = matchResult.Models[0];
+                    UnityMainThreadDispatcher.Instance.Enqueue(() =>
+                    {
+                        channelManager.UnsubscribeFromChannel("match_players");
+                        MatchManager.Instance.StartGame(match);
+                    });
+                }
+                else
+                {
+                    Debug.LogWarning("Match not found with ID: " + insertedRow.Match_ID);
+                }
+            }
+        });
+        Debug.Log("SubscribeToMatchStart");
+    }
+    public async Task<List<MatchPlayers>> GetMatchPlayers(Guid match_ID)
+    {
+        var playersResult = await client
+        .From<MatchPlayers>()
+        .Where(mp => mp.Match_ID == match_ID)
+        .Get();
+
+        return playersResult.Models;
+    }
+    // ---------- GAME ----------
+
+    public async Task<List<GamePlayers>> GetGamePlayersByGameID(int gameId)
+    {
+        try
+        {
+            var result = await client
+                .From<GamePlayers>()
+                .Where(gp => gp.FK_Game_ID == gameId)
+                .Get();
+
+            return result.Models ?? new List<GamePlayers>();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error retrieving game players by GameID {gameId}: {ex.Message}");
+            return new List<GamePlayers>();
+        }
+    }
+    public async Task<int?> GetGamesPlayed(int gameId)
+    {
+        try
+        {
+            var response = await client
+            .From<PublishedGames>()
+            .Where(pg => pg.Game_ID == gameId)
+            .Select("games_played")
+            .Single();
+            return response?.Games_Played;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error fetching games played for gameId {gameId}: {ex.Message}");
+            return null;
+        }
+    }
+    public async Task<int> CountDecksByGameId(int gameId)
+    {
+        try
+        {
+            var response = await client
+                .From<Decks>()
+                .Where(d => d.FK_Game_ID == gameId)
+                .Get();
+
+            return response.Models.Count;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error counting decks for gameId {gameId}: {ex.Message}");
+            return 0;
+        }
+    }
+    public async Task LogGameLogin(int userId, int gameId)
+    {
+        try
+        {
+            // Check if row exists
+            var existingEntry = await client
+                .From<GamePlayers>()
+                .Where(gp => gp.FK_User_ID == userId && gp.FK_Game_ID == gameId)
+                .Get();
+
+            if (existingEntry.Models.Count > 0)
+            {
+                // Row exists – trigger DB update (last_logged_in set by trigger)
+                var existing = existingEntry.Models[0];
+
+                var updateResponse = await client
+                    .From<GamePlayers>()
+                    .Where(gp => gp.FK_User_ID == existing.FK_User_ID && gp.FK_Game_ID == existing.FK_Game_ID)
+                    .Set(gl => gl.Win_Count, existing.Win_Count) // Dummy update to trigger the trigger
+                    .Update();
+
+                Debug.Log("Updated last_logged_in via DB.");
+            }
+            else
+            {
+                // Row doesn't exist – insert new (DB sets last_logged_in automatically)
+                var newEntry = new GamePlayers
+                {
+                    FK_User_ID = userId,
+                    FK_Game_ID = gameId,
+                    Win_Count = 0,
+                    Lose_Count = 0
+                    // Do NOT set Last_Logged_In
+                };
+
+                var insertResponse = await client
+                    .From<GamePlayers>()
+                    .Insert(newEntry);
+
+                Debug.Log("Inserted new game login entry (DB set last_logged_in).");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error logging game login: {ex.Message}");
+        }
+    }
+    public async Task IncreaseGamesPlayed(int gameId)
+    {
+        try
+        {
+            var existingEntry = await client
+                .From<PublishedGames>()
+                .Where(pg => pg.Game_ID == gameId)
+                .Get();
+
+            var game = existingEntry.Models.FirstOrDefault();
+            if (game != null)
+            {
+                // Update the appropriate count
+                game.Games_Played += 1;
+
+                var updateResponse = await client
+                    .From<PublishedGames>()
+                    .Where(pg => pg.Game_ID == gameId)
+                    .Set(gp => gp.Games_Played, game.Games_Played)
+                    .Update();
+
+                Debug.Log($"Updated {game.Games_Played}");
+            }
+            else
+            {
+                Debug.LogWarning("Player entry not found.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error updating win/lose count: {ex.Message}");
+        }
+    }
+    public async Task UpdatePlayerWinLoseCount(int userId, int gameId,bool isWin)
+    {
+        try
+        {
+            var existingEntry = await client
+                .From<GamePlayers>()
+                .Where(gp => gp.FK_User_ID == userId && gp.FK_Game_ID == gameId)
+                .Get();
+
+            var player = existingEntry.Models.FirstOrDefault();
+            if (player != null)
+            {
+                // Update the appropriate count
+                if (isWin)
+                    player.Win_Count += 1;
+                else
+                    player.Lose_Count += 1;
+
+                var updateResponse = await client
+                    .From<GamePlayers>()
+                    .Where(gp => gp.FK_User_ID == userId && gp.FK_Game_ID == gameId)
+                    .Set(gl => gl.Win_Count, player.Win_Count)
+                    .Set(gl => gl.Lose_Count, player.Lose_Count)
+                    .Update();
+
+                Debug.Log($"Updated {(isWin ? "win" : "lose")} count for player.");
+            }
+            else
+            {
+                Debug.LogWarning("Player entry not found.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error updating win/lose count: {ex.Message}");
+        }
+    }
+    public async void ChangeTurnInMatch(Guid match_ID, int activePlayer)
+    {
+        var playersResult = await client
+        .From<Match>()
+        .Where(m => m.Match_ID == match_ID)
+        .Set(m => m.Current_Turn_Index, activePlayer)
+        .Update();
+
+    }
+    public async Task SubscribeToGameState(Guid currentMatchID)
+    {
+        // Get reference to RealTimeChannelManager
+        var channelManager = FindFirstObjectByType<RealTimeChannelManager>();
+
+        if (channelManager == null)
+        {
+            Debug.LogError("RealTimeChannelManager not found in the scene!");
+            return;
+        }
+
+        // Subscribe to the "matches" channel using RealTimeChannelManager
+        await channelManager.SubscribeToChannel("matches", ListenType.Updates, (change) =>
+        {
+            // This is where the handler logic goes
+            Debug.Log("Match table update received");
+
+            var match = change.Model<Match>();
+
+            if (match != null)
+            {
+
+                Debug.Log(match.Match_ID);
+                if (match.Match_ID == currentMatchID)
+                {
+                    Debug.Log(match.Match_ID);
+                    if (match.Game_State != null &&
+                        match.Game_State.ContainsKey("phase") &&
+                        match.Game_State["phase"].ToString() == "started")
+                    {
+                        Debug.Log("Changed turn");
+
+                        UnityMainThreadDispatcher.Instance.Enqueue(() =>
+                        {
+                                OnChangeTurn?.Invoke(match.Current_Turn_Index);
+                        });
+                        
+                    }
+                }
+            }
+        });
+
+    }
+    public async Task PollForUpdates(Guid matchID)
+    {
+        while (true)
+        {
+            var response = await client
+                .From<Match>()
+                .Where(m => m.Match_ID == matchID)
+                .Single();
+
+            if (response != null && response.Game_State.ContainsKey("phase") &&
+                response.Game_State["phase"].ToString() == "started")
+            {
+                Debug.Log("Game started!");
+
+                if (response.Game_State.ContainsKey("active_player_id"))
+                {
+                    int activePlayerId = Convert.ToInt32(response.Game_State["active_player_id"]);
+                    UnityMainThreadDispatcher.Instance.Enqueue(() =>
+                    {
+                        OnGameStart?.Invoke(activePlayerId);
+                    });
+                    break; // Exit the loop once the game starts
+                }
+            }
+
+            await Task.Delay(2000); // Poll every 3 seconds
+        }
+    }
+    public async Task SubscribeToOpponent(Guid currentMatchID, int playerIndex)
+    {
+        
+        // Subscribe to updates on the MatchPlayers table for real-time changes
+         await FindFirstObjectByType<RealTimeChannelManager>().SubscribeToChannel("match_players", ListenType.Updates ,change =>
+         {
+             var opponent = change.Model<MatchPlayers>();
+             if (opponent != null && opponent.Match_ID == currentMatchID && opponent.Player_Index == playerIndex)
+             {
+                 Debug.Log("📡 Opponent update received");
+                 UnityMainThreadDispatcher.Instance.Enqueue(() =>
+                 {
+                     onOpponentUpdate?.Invoke(opponent);
+                 });
+                 
+             }
+         });
+    }
+    public async Task UpdatePlayerInMatch(MatchPlayers player)
+    {
+        var response = await client
+         .From<MatchPlayers>()
+         .Upsert(player);
+
+        if (response.Models != null && response.Models.Count > 0)
+        {
+            Debug.Log("Player row inserted or updated via upsert.");
+        }
     }
     // <-----------------------------------Utility------------------------------------------>
     public async Task<byte[]> DownloadFileFromSupabase(string bucketName, string filePath)
@@ -1041,5 +1892,7 @@ public class SupabaseManager : MonoBehaviour
             return null;
         }
     }
+
+
 }
 

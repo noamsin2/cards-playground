@@ -8,7 +8,7 @@ namespace Models
     [Table("users")]
     public class Users : BaseModel
     {
-        [PrimaryKey("user_id", true)] // Optional: Define a primary key if needed
+        [PrimaryKey("user_id")] // Optional: Define a primary key if needed
         public int User_ID { get; set; }
 
         //[Column("created_at")]
@@ -16,6 +16,8 @@ namespace Models
 
         [Column("steam_id")]
         public string Steam_ID { get; set; }
+        [Column("is_admin")]
+        public bool Is_Admin { get; set; }
     }
 
 }

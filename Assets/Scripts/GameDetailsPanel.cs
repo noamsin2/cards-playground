@@ -4,14 +4,22 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
-
+using Michsky.UI.Reach;
 public class GameDetailsPanel : MonoBehaviour
 {
     [SerializeField] private TMP_Text gameNameText;
     [SerializeField] private GameObject gameDescriptionText;
     [SerializeField] private GameObject settingsText;
-    [SerializeField] private Button playButton;
+    [SerializeField] private Michsky.UI.Reach.ButtonManager playButton;
     private PublishedGames game;
+
+    private void Start()
+    {
+        gameDescriptionText.SetActive(false);
+        settingsText.SetActive(false);
+        gameNameText.gameObject.SetActive(false);
+        playButton.gameObject.SetActive(false);
+    }
     public void ShowGameDetails(PublishedGames game)
     {
         this.game = game;
@@ -41,7 +49,24 @@ public class GameDetailsPanel : MonoBehaviour
 
         playButton.gameObject.SetActive(true);
         playButton.onClick.RemoveAllListeners();
-        playButton.onClick.AddListener(() => SceneLoader.Instance.LoadGameScene(game.Game_ID.ToString()));
+        playButton.onClick.AddListener(() =>
+        {
+            Debug.Log("Play button clicked");
+            PlayGame(game);
+        });
     }
-    
+    private async void PlayGame(PublishedGames game)
+    {
+        int gameID = game.Game_ID;
+        if (game.Updated_At == null)
+        {
+            Debug.Log("PlayGame called with ID: " + gameID);
+            await SupabaseManager.Instance.LogGameLogin(UserManager.Instance.userId, gameID);
+            SceneLoader.Instance.LoadGameScene(gameID.ToString());
+        }
+        else
+        {
+            // view an error message (game is being updated)
+        }
+    }
 }

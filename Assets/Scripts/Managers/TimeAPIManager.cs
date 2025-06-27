@@ -21,6 +21,7 @@ public class TimeAPIManager : MonoBehaviour
         {
             try
             {
+
                 // Fetch the response from the API
                 string response = await client.GetStringAsync(apiUrl);
 

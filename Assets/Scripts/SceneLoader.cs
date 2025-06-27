@@ -1,11 +1,12 @@
 using System.Threading.Tasks;
+using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using static UnityEngine.Rendering.DebugUI;
 
 public class SceneLoader : MonoBehaviour
 {
     public static SceneLoader Instance;
-
     void Awake()
     {
         // Check if an instance already exists
@@ -25,7 +26,7 @@ public class SceneLoader : MonoBehaviour
     private void Start()
     {
         //for testing - remove later
-        LoadGameScene("6");
+        //LoadGameScene("6");
     }
     public void LoadGameScene(string gameId)
     {
@@ -36,6 +37,37 @@ public class SceneLoader : MonoBehaviour
 
     public void LoadMenuScene()
     {
+        PlayerPrefs.DeleteKey("SelectedGameID");
+        SceneManager.LoadScene("Create Game Scene");
+    }
+    public void LoadMenuScene(string message)
+    {
+        Debug.Log("Loading menu scene and preparing to show message...");
+
+        PlayerPrefs.DeleteKey("SelectedGameID");
+
+        // Define the handler so it can be unsubscribed properly
+        UnityEngine.Events.UnityAction<Scene, LoadSceneMode> handler = null;
+
+        handler = (Scene scene, LoadSceneMode mode) =>
+        {
+            if (MessagePanel.Instance != null)
+            {
+                MessagePanel.Instance.ShowMessage(message);
+            }
+            else
+            {
+                Debug.LogWarning("MessagePanel.Instance is null!");
+            }
+
+            // Unsubscribe from event
+            SceneManager.sceneLoaded -= handler;
+            Debug.Log("Unsubscribed from sceneLoaded event.");
+        };
+
+        SceneManager.sceneLoaded += handler;
+        Debug.Log("Subscribed to sceneLoaded event, loading scene...");
+
         SceneManager.LoadScene("Create Game Scene");
     }
 }

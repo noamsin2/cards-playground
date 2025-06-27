@@ -11,12 +11,14 @@ using UnityEngine.UI;
 using UnityEngine.Windows;
 using static Unity.IO.LowLevel.Unsafe.AsyncReadManagerMetrics;
 using static UnityEngine.Rendering.DebugUI;
+using Michsky.UI.Reach;
 
 public class SettingsPanel : MonoBehaviour
 {
     [SerializeField] private MyGamesPanel myGamesPanel;
     [SerializeField] private GameObject additionalSettingsPanel;
-    [SerializeField] private GameObject settingsPanel;
+    [SerializeField] private SettingsPanel settingsPanel;
+    //[SerializeField] private GameObject settings;
     [SerializeField] private CreateGamePanel createGamePanel;
     [SerializeField] private HideValidationPanel hideValidationPanel;
 
@@ -28,10 +30,10 @@ public class SettingsPanel : MonoBehaviour
 
     [Header("Rules")]
     [SerializeField] private TMP_InputField playerHealth;
-    [SerializeField] public TMP_Dropdown deckSize;
-    [SerializeField] public TMP_Dropdown initialHandSize;
-    [SerializeField] public TMP_Dropdown maxHandSize;
-    [SerializeField] private Slider turnLength;
+    [SerializeField] public Michsky.UI.Reach.Dropdown deckSize;
+    [SerializeField] public Michsky.UI.Reach.Dropdown initialHandSize;
+    [SerializeField] public Michsky.UI.Reach.Dropdown maxHandSize;
+    [SerializeField] private SliderManager turnLength;
 
     [Header("Error Message")]
     [SerializeField] private GameObject winConError;
@@ -39,8 +41,8 @@ public class SettingsPanel : MonoBehaviour
     [SerializeField] private GameObject playerHealthError;
 
     [Header("Additional Rules")]
-    [SerializeField] private TMP_Dropdown cardCopies;
-    [SerializeField] private TMP_Dropdown limitHandSize;
+    [SerializeField] private Michsky.UI.Reach.Dropdown cardCopies;
+    [SerializeField] private Michsky.UI.Reach.Dropdown limitHandSize;
     void Start()
     {
         healthWinCon.onValueChanged.AddListener(value => TogglePlayerHealthInput(value));
@@ -48,7 +50,7 @@ public class SettingsPanel : MonoBehaviour
         cardsWinCon.onValueChanged.AddListener(value => OnWinConToggle(value));
         projectName.onValueChanged.AddListener(value => projectNameError.SetActive(false));
         playerHealth.onValueChanged.AddListener(value => OnPlayerHealthInput(value));
-        PopulateDropdowns();
+        //PopulateDropdowns();
     }
 
     // called from edit game window
@@ -103,25 +105,36 @@ public class SettingsPanel : MonoBehaviour
     }
     public void PopulateDropdowns()
     {
-        PopulateDropdown(deckSize, 2, 50, true);
-        PopulateDropdown(initialHandSize, 1, 25, true);
-        PopulateDropdown(maxHandSize, 1, 50, true);
-        PopulateDropdown(cardCopies, 1, 10, false);
-        PopulateDropdown(limitHandSize, 1, 50, false);
+        Debug.Log("POPULATE DROPDOWN");
+        if (deckSize != null)
+            PopulateDropdown(deckSize, 2, 50, false);
+        if (initialHandSize != null)
+            PopulateDropdown(initialHandSize, 1, 25, false);
+        if (maxHandSize != null)
+            PopulateDropdown(maxHandSize, 1, 50, false);
     }
-    private void PopulateDropdown(TMP_Dropdown dropdown, int minSize = 1, int maxSize = 5, bool clearOptions = true)
+    public void PopulateAdditionalDropdowns()
     {
-        if (clearOptions)
+
+        if (cardCopies != null)
+            PopulateDropdown(cardCopies, 1, 10, true);
+        if (limitHandSize != null)
+            PopulateDropdown(limitHandSize, 1, 50, true);
+    }
+    private void PopulateDropdown(Michsky.UI.Reach.Dropdown dropdown, int minSize = 1, int maxSize = 5, bool noOption = true)
+    {
+        Debug.Log("POPULATE DROPDOWN FOR " + dropdown.name);
+        dropdown.items.Clear();
+        if (noOption)
         {
-            dropdown.ClearOptions();
+            dropdown.CreateNewItem("No", false);
         }
-        List<string> options = new List<string>();
         for (int i = minSize; i <= maxSize; i++)
         {
-            options.Add(i.ToString());
+            dropdown.CreateNewItem(i.ToString(), false);
         }
-
-        dropdown.AddOptions(options);
+        dropdown.Initialize();
+        
     }
 
     public void InitializeGameSettings()
@@ -129,8 +142,9 @@ public class SettingsPanel : MonoBehaviour
         if (!ValidateInput())
             return;
         additionalSettingsPanel.SetActive(true);
-        myGamesPanel.gameObject.SetActive(false);
-        settingsPanel.SetActive(false);
+        //PopulateAdditionalDropdowns();
+        //myGamesPanel.gameObject.SetActive(false);
+        //settings.gameObject.SetActive(false);
 
     }
     private bool ValidateInput()
@@ -168,12 +182,12 @@ public class SettingsPanel : MonoBehaviour
         {
             { "health_win_condition", healthWinCon.isOn }, { "cards_win_condition", cardsWinCon.isOn },
             { "player_health", playerHealth.text},
-            { "deck_size", deckSize.options[deckSize.value].text },
-            { "initial_hand_size", initialHandSize.options[initialHandSize.value].text },
-            { "max_hand_size", maxHandSize.options[maxHandSize.value].text },
-            { "turn_length", (int)turnLength.value },
-            { "card_copies", cardCopies.options[cardCopies.value].text },
-            { "limit_hand_size", limitHandSize.options[limitHandSize.value].text }
+            { "deck_size", settingsPanel.deckSize.items[deckSize.index].itemName },
+            { "initial_hand_size", settingsPanel.initialHandSize.items[initialHandSize.index].itemName },
+            { "max_hand_size", settingsPanel.maxHandSize.items[maxHandSize.index].itemName },
+            { "turn_length", (int)settingsPanel.turnLength.mainSlider.value},
+            { "card_copies", cardCopies.items[cardCopies.index].itemName },
+            { "limit_hand_size", limitHandSize.items[limitHandSize.index].itemName }
         };
         string jsonSettings = JsonConvert.SerializeObject(gameSettings);
 
@@ -190,18 +204,40 @@ public class SettingsPanel : MonoBehaviour
     public void InitializeAdditionalSettings()
     {
         Debug.Log("ADDITIONAL SETTINGS");
-        var gameSettings = new Dictionary<string, object>
+        if (settingsPanel == null)
         {
-            { "health_win_condition", healthWinCon.isOn }, { "cards_win_condition", cardsWinCon.isOn },
-            { "player_health", playerHealth.text},
-            { "deck_size", deckSize.options[deckSize.value].text },
-            { "initial_hand_size", initialHandSize.options[initialHandSize.value].text },
-            { "max_hand_size", maxHandSize.options[maxHandSize.value].text },
-            { "turn_length", (int)turnLength.value },
-            { "card_copies", cardCopies.options[cardCopies.value].text },
-            { "limit_hand_size", limitHandSize.options[limitHandSize.value].text }
+            Debug.LogError("settingsPanel is null!");
+            return;
+        }
+
+        string GetDropdownValue(Michsky.UI.Reach.Dropdown dropdown)
+        {
+            if (dropdown == null)
+            {
+                Debug.LogWarning("Dropdown is null");
+                return "null";
+            }
+
+            if (dropdown.items == null || dropdown.items.Count <= dropdown.index)
+            {
+                Debug.LogWarning($"Dropdown '{dropdown.name}' has invalid items or index");
+                return "invalid";
+            }
+
+            return dropdown.items[dropdown.index].itemName;
+        }
+         var gameSettings = new Dictionary<string, object>
+        {
+            { "health_win_condition", healthWinCon?.isOn ?? false },
+            { "cards_win_condition", cardsWinCon?.isOn ?? false },
+            { "player_health", playerHealth?.text ?? "0" },
+            { "deck_size", GetDropdownValue(settingsPanel.deckSize) },
+            { "initial_hand_size", GetDropdownValue(settingsPanel.initialHandSize) },
+            { "max_hand_size", GetDropdownValue(settingsPanel.maxHandSize) },
+            { "turn_length", (int)settingsPanel.turnLength.mainSlider.value},
+            { "card_copies", GetDropdownValue(cardCopies) },
+            { "limit_hand_size", GetDropdownValue(limitHandSize) }
         };
-        Debug.Log("deck_size: " + deckSize.options[deckSize.value].text);
         // Convert dictionary to JSON
         string jsonSettings = JsonConvert.SerializeObject(gameSettings);
 
@@ -225,13 +261,14 @@ public class SettingsPanel : MonoBehaviour
         }
         createGamePanel.InitializePanel(newGame);
         gameObject.SetActive(false);
+        myGamesPanel.DisplayGames();
     }
 
     public void PopulateUI()
     {
         gameObject.SetActive(true);
         PopulateDropdowns();
-
+        PopulateAdditionalDropdowns();
         StartCoroutine(DelayedPopulateSettings());
        
     }
@@ -239,7 +276,15 @@ public class SettingsPanel : MonoBehaviour
     {
         
         yield return null;
+        yield return new WaitUntil(() =>
+           deckSize.items.Count > 0 &&
+           initialHandSize.items.Count > 0 &&
+           maxHandSize.items.Count > 0 &&
+           cardCopies.items.Count > 0 &&
+           limitHandSize.items.Count > 0
+       );
 
+        Debug.Log("DELAYED POPULATE");
         CardGames game = createGamePanel.game;
         var settings = JObject.Parse(game.Game_Settings);
         projectName.text = game.Name;
@@ -252,31 +297,31 @@ public class SettingsPanel : MonoBehaviour
         SetDropdownValue(initialHandSize, settings["initial_hand_size"].ToString());
         SetDropdownValue(maxHandSize, settings["max_hand_size"].ToString());
 
-        turnLength.value = settings["turn_length"].Value<float>();
+        turnLength.mainSlider.value = settings["turn_length"].Value<float>();
 
         SetDropdownValue(cardCopies, settings["card_copies"].ToString());
         SetDropdownValue(limitHandSize, settings["limit_hand_size"].ToString());
     }
-    private void SetDropdownValue(TMP_Dropdown dropdown, string value)
+    private void SetDropdownValue(Michsky.UI.Reach.Dropdown dropdown, string value)
     {
         Debug.Log($"Setting dropdown value: {value}");
 
-        int index = dropdown.options.FindIndex(option => option.text == value);
+        int index = dropdown.items.FindIndex(item => item.itemName == value);
         if (index != -1)
         {
-            dropdown.value = index;
-            dropdown.RefreshShownValue();
+            dropdown.index = index;
+            dropdown.SetDropdownIndex(index);
+            Debug.Log($"Dropdown value set to: {dropdown.items[index].itemName}");
         }
         else
         {
-            Debug.LogError($"Value '{value}' not found in dropdown options.");
+            Debug.LogError($"Value '{value}' not found in dropdown items.");
         }
-        Debug.Log(dropdown.value);
     }
     public void RevertChanges()
     {
         var settings = JObject.Parse(createGamePanel.game.Game_Settings);
-        SetDropdownValue(cardCopies, settings["card_copies"].ToString());
-        SetDropdownValue(limitHandSize, settings["limit_hand_size"].ToString());
+        SetDropdownValue(settingsPanel.cardCopies, settings["card_copies"].ToString());
+        SetDropdownValue(settingsPanel.limitHandSize, settings["limit_hand_size"].ToString());
     }
 }
